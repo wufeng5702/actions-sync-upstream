@@ -37,7 +37,7 @@ All inputs are optional.
 | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `upstream`      | `""`    | Upstream repository as `owner/name` or a github.com URL. Empty = auto-detect the fork's parent (exits successfully if the repository is not a fork).                        |
 | `default_branch` | `""`   | Branch to sync. Empty = the repository's default branch.                                                                                                                  |
-| `fetch_depth`   | `"0"`   | Fetch depth for checkout and upstream fetch. `0` = full history, always safe for rebase. Smaller values are faster but the rebase fails if the merge base is deeper.       |
+| `fetch_depth`   | `"0"`   | Fetch depth for checkout and both sync fetches (origin and upstream). `0` = full history, always safe for rebase. Smaller values are faster but the rebase fails if the merge base is deeper.       |
 | `token`         | `""`    | Token used for API calls and pushing. Empty = the workflow's `GITHUB_TOKEN`.                                                                                              |
 
 ```yaml

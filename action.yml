@@ -11,7 +11,7 @@ inputs:
     required: false
     default: ""
   fetch_depth:
-    description: "Fetch depth for checkout and upstream fetch. 0 = full history (always safe for rebase)."
+    description: "Fetch depth for checkout and both sync fetches (origin and upstream). 0 = full history (always safe for rebase)."
     required: false
     default: "0"
   token:
@@ -75,9 +75,10 @@ runs:
           exit 1
         fi
 
-        # fetch <remote> <refspec>; depth 0 = full history (git rejects --depth=0).
+        # fetch <remote> <refspec>; depth 0 = full history (git rejects --depth=0,
+        # so compare numerically to also treat "00" as full history).
         fetch_branch() {
-          if [ "$INPUT_FETCH_DEPTH" = "0" ]; then
+          if [ "$INPUT_FETCH_DEPTH" -eq 0 ]; then
             git fetch --no-tags --prune "$1" "$2"
           else
             git fetch --no-tags --prune "--depth=$INPUT_FETCH_DEPTH" "$1" "$2"
@@ -100,6 +101,13 @@ runs:
           git remote add upstream "$UPSTREAM_URL"
         fi
 
+        # Drop the token from the remote URLs when the action finishes, so no
+        # later step (or self-hosted rerun) sees it in .git/config.
+        reset_remotes() {
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url upstream "https://github.com/${UPSTREAM}.git"
+        }
+
         if ! fetch_branch upstream "+refs/heads/${BRANCH}:refs/remotes/upstream/${BRANCH}"; then
           echo "::error::Cannot fetch '${BRANCH}' from upstream ${UPSTREAM} — check that the branch exists upstream."
           exit 1
@@ -113,7 +121,10 @@ runs:
         case "$LS_RC" in
           0)
             FORK_BRANCH_EXISTS=1
-            fetch_branch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+            if ! fetch_branch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"; then
+              echo "::error::Cannot fetch '${BRANCH}' from origin."
+              exit 1
+            fi
             ;;
           2)
             FORK_BRANCH_EXISTS=0
@@ -146,6 +157,7 @@ runs:
         # Nothing to do when the fork branch already matches upstream.
         if [ "$FORK_BRANCH_EXISTS" -eq 1 ] && [ "$AFTER" = "$(git rev-parse "refs/remotes/origin/${BRANCH}")" ]; then
           echo "Already up to date: ${BRANCH} matches upstream."
+          reset_remotes
           exit 0
         fi
 
@@ -154,6 +166,7 @@ runs:
           exit 1
         fi
 
+        reset_remotes
         if [ "$FORK_BRANCH_EXISTS" -eq 1 ]; then
           echo "Synced ${BRANCH}: ${BEFORE} -> ${AFTER}"
         else
