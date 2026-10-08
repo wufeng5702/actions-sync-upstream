@@ -75,8 +75,8 @@ runs:
           exit 1
         fi
 
-        # fetch <remote> <refspec>; depth 0 = full history (git rejects --depth=0,
-        # so compare numerically to also treat "00" as full history).
+        # fetch <remote> <refspec>; depth 0 = full history — git rejects
+        # --depth=0 ("not a positive number"), so the zero case omits the flag.
         fetch_branch() {
           if [ "$INPUT_FETCH_DEPTH" -eq 0 ]; then
             git fetch --no-tags --prune "$1" "$2"
