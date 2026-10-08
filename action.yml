@@ -1,0 +1,153 @@
+name: "Sync fork with upstream (rebase)"
+description: "Sync a fork with its upstream repository by rebasing and pushing with --force-with-lease"
+
+inputs:
+  upstream:
+    description: "Upstream repository as owner/name (or a github.com URL). Empty = auto-detect the fork's parent."
+    required: false
+    default: ""
+  default_branch:
+    description: "Branch to sync. Empty = the repository's default branch."
+    required: false
+    default: ""
+  fetch_depth:
+    description: "Fetch depth for checkout and upstream fetch. 0 = full history (always safe for rebase)."
+    required: false
+    default: "0"
+  token:
+    description: "Token used for API calls and pushing. Empty = the workflow's GITHUB_TOKEN."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: ${{ inputs.fetch_depth }}
+        fetch-tags: false
+
+    - name: Rebase onto upstream
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token || github.token }}
+        INPUT_UPSTREAM: ${{ inputs.upstream }}
+        INPUT_BRANCH: ${{ inputs.default_branch }}
+        INPUT_FETCH_DEPTH: ${{ inputs.fetch_depth }}
+        INPUT_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        # Resolve upstream: explicit input first, otherwise the fork's parent.
+        if [ -n "${INPUT_UPSTREAM:-}" ]; then
+          UPSTREAM="$INPUT_UPSTREAM"
+        else
+          UPSTREAM="$(gh api "repos/${GITHUB_REPOSITORY}" --jq 'if .parent == null then "" else .parent.full_name end')"
+        fi
+
+        # Accept "owner/name", a github.com URL, or a URL ending in .git.
+        UPSTREAM="${UPSTREAM#https://github.com/}"
+        UPSTREAM="${UPSTREAM%/}"
+        UPSTREAM="${UPSTREAM%.git}"
+
+        if [ -z "$UPSTREAM" ]; then
+          echo "${GITHUB_REPOSITORY} is not a fork and no 'upstream' input was given; nothing to sync."
+          exit 0
+        fi
+
+        if ! [[ "$UPSTREAM" =~ ^[^/]+/[^/]+$ ]]; then
+          echo "::error::Invalid upstream '${UPSTREAM}', expected 'owner/name'."
+          exit 1
+        fi
+
+        # Resolve branch: explicit input first, otherwise the repository default branch.
+        if [ -n "${INPUT_BRANCH:-}" ]; then
+          BRANCH="$INPUT_BRANCH"
+        else
+          BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')"
+        fi
+
+        DEPTH_OPTS=()
+        if [ -n "${INPUT_FETCH_DEPTH:-}" ] && [ "$INPUT_FETCH_DEPTH" != "0" ]; then
+          DEPTH_OPTS=(--depth="$INPUT_FETCH_DEPTH")
+        fi
+
+        echo "Syncing ${GITHUB_REPOSITORY}@${BRANCH} from ${UPSTREAM} (rebase mode)"
+
+        # Point both remotes at github.com, using the provided token when there is one.
+        ORIGIN_URL="https://github.com/${GITHUB_REPOSITORY}.git"
+        UPSTREAM_URL="https://github.com/${UPSTREAM}.git"
+        if [ -n "${INPUT_TOKEN:-}" ]; then
+          # Replace the credentials actions/checkout persisted, so all git
+          # operations use the provided token instead.
+          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          ORIGIN_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          UPSTREAM_URL="https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM}.git"
+        fi
+
+        git remote set-url origin "$ORIGIN_URL"
+        if git remote get-url upstream >/dev/null 2>&1; then
+          git remote set-url upstream "$UPSTREAM_URL"
+        else
+          git remote add upstream "$UPSTREAM_URL"
+        fi
+
+        git fetch --no-tags --prune "${DEPTH_OPTS[@]}" upstream \
+          "+refs/heads/${BRANCH}:refs/remotes/upstream/${BRANCH}"
+
+        # Does the fork already have this branch? ls-remote exits 2 when the ref is missing.
+        set +e
+        git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null 2>&1
+        LS_RC=$?
+        set -e
+        case "$LS_RC" in
+          0)
+            FORK_BRANCH_EXISTS=1
+            git fetch --no-tags --prune "${DEPTH_OPTS[@]}" origin \
+              "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+            ;;
+          2)
+            FORK_BRANCH_EXISTS=0
+            echo "Branch '${BRANCH}' does not exist on origin; it will be created from upstream."
+            ;;
+          *)
+            echo "::error::Cannot reach origin (git ls-remote failed with exit ${LS_RC})."
+            exit 1
+            ;;
+        esac
+
+        # Reset the working copy to the fork's branch, or to upstream when new.
+        if [ "$FORK_BRANCH_EXISTS" -eq 1 ]; then
+          git checkout -B "$BRANCH" "refs/remotes/origin/${BRANCH}"
+        else
+          git checkout -B "$BRANCH" "refs/remotes/upstream/${BRANCH}"
+        fi
+
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        BEFORE="$(git rev-parse HEAD)"
+        if ! git rebase "refs/remotes/upstream/${BRANCH}"; then
+          git rebase --abort 2>/dev/null || true
+          echo "::error::Rebase of '${BRANCH}' onto ${UPSTREAM}@${BRANCH} failed (conflict, or history too shallow — try fetch_depth: 0). Nothing was pushed."
+          exit 1
+        fi
+        AFTER="$(git rev-parse HEAD)"
+
+        # Nothing to do when the fork branch already matches upstream.
+        if [ "$FORK_BRANCH_EXISTS" -eq 1 ] && [ "$AFTER" = "$(git rev-parse "refs/remotes/origin/${BRANCH}")" ]; then
+          echo "Already up to date: ${BRANCH} matches upstream."
+          exit 0
+        fi
+
+        if ! git push --force-with-lease origin "refs/heads/${BRANCH}"; then
+          echo "::error::Push of '${BRANCH}' was rejected (stale remote-tracking ref, branch protection, or missing permission)."
+          exit 1
+        fi
+
+        if [ "$FORK_BRANCH_EXISTS" -eq 1 ]; then
+          echo "Synced ${BRANCH}: ${BEFORE} -> ${AFTER}"
+        else
+          echo "Created ${BRANCH} at ${AFTER}"
+        fi
