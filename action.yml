@@ -70,8 +70,8 @@ runs:
           BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')"
         fi
 
-        if ! [[ "$INPUT_FETCH_DEPTH" =~ ^[0-9]+$ ]]; then
-          echo "::error::fetch_depth must be a non-negative integer, got '${INPUT_FETCH_DEPTH}'."
+        if ! [[ "$INPUT_FETCH_DEPTH" =~ ^(0|[1-9][0-9]*)$ ]]; then
+          echo "::error::fetch_depth must be 0 or a positive integer without leading zeros, got '${INPUT_FETCH_DEPTH}'."
           exit 1
         fi
 
@@ -102,10 +102,12 @@ runs:
         fi
 
         # Drop the token from the remote URLs when the action finishes, so no
-        # later step (or self-hosted rerun) sees it in .git/config.
+        # later step (or self-hosted rerun) sees it in .git/config. No .git
+        # suffix: this must string-match what actions/checkout expects, or the
+        # next checkout wipes the workspace thinking the URL changed.
         reset_remotes() {
-          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git remote set-url upstream "https://github.com/${UPSTREAM}.git"
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}"
+          git remote set-url upstream "https://github.com/${UPSTREAM}"
         }
 
         if ! fetch_branch upstream "+refs/heads/${BRANCH}:refs/remotes/upstream/${BRANCH}"; then
