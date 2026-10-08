@@ -27,6 +27,9 @@ runs:
       with:
         fetch-depth: ${{ inputs.fetch_depth }}
         fetch-tags: false
+        # The sync script configures auth itself (token input / GH_TOKEN);
+        # persisting checkout's credential would shadow it.
+        persist-credentials: false
 
     - name: Rebase onto upstream
       shell: bash
@@ -35,7 +38,6 @@ runs:
         INPUT_UPSTREAM: ${{ inputs.upstream }}
         INPUT_BRANCH: ${{ inputs.default_branch }}
         INPUT_FETCH_DEPTH: ${{ inputs.fetch_depth }}
-        INPUT_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
 
@@ -68,23 +70,28 @@ runs:
           BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')"
         fi
 
-        DEPTH_OPTS=()
-        if [ -n "${INPUT_FETCH_DEPTH:-}" ] && [ "$INPUT_FETCH_DEPTH" != "0" ]; then
-          DEPTH_OPTS=(--depth="$INPUT_FETCH_DEPTH")
+        if ! [[ "$INPUT_FETCH_DEPTH" =~ ^[0-9]+$ ]]; then
+          echo "::error::fetch_depth must be a non-negative integer, got '${INPUT_FETCH_DEPTH}'."
+          exit 1
         fi
+
+        # fetch <remote> <refspec>; depth 0 = full history (git rejects --depth=0).
+        fetch_branch() {
+          if [ "$INPUT_FETCH_DEPTH" = "0" ]; then
+            git fetch --no-tags --prune "$1" "$2"
+          else
+            git fetch --no-tags --prune "--depth=$INPUT_FETCH_DEPTH" "$1" "$2"
+          fi
+        }
 
         echo "Syncing ${GITHUB_REPOSITORY}@${BRANCH} from ${UPSTREAM} (rebase mode)"
 
-        # Point both remotes at github.com, using the provided token when there is one.
-        ORIGIN_URL="https://github.com/${GITHUB_REPOSITORY}.git"
-        UPSTREAM_URL="https://github.com/${UPSTREAM}.git"
-        if [ -n "${INPUT_TOKEN:-}" ]; then
-          # Replace the credentials actions/checkout persisted, so all git
-          # operations use the provided token instead.
-          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
-          ORIGIN_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          UPSTREAM_URL="https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM}.git"
-        fi
+        # Authenticate every github.com git operation with GH_TOKEN: the
+        # workflow's GITHUB_TOKEN by default, or the token input when given.
+        # checkout runs with persist-credentials: false, so nothing else
+        # overrides this.
+        ORIGIN_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+        UPSTREAM_URL="https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM}.git"
 
         git remote set-url origin "$ORIGIN_URL"
         if git remote get-url upstream >/dev/null 2>&1; then
@@ -93,8 +100,10 @@ runs:
           git remote add upstream "$UPSTREAM_URL"
         fi
 
-        git fetch --no-tags --prune "${DEPTH_OPTS[@]}" upstream \
-          "+refs/heads/${BRANCH}:refs/remotes/upstream/${BRANCH}"
+        if ! fetch_branch upstream "+refs/heads/${BRANCH}:refs/remotes/upstream/${BRANCH}"; then
+          echo "::error::Cannot fetch '${BRANCH}' from upstream ${UPSTREAM} — check that the branch exists upstream."
+          exit 1
+        fi
 
         # Does the fork already have this branch? ls-remote exits 2 when the ref is missing.
         set +e
@@ -104,8 +113,7 @@ runs:
         case "$LS_RC" in
           0)
             FORK_BRANCH_EXISTS=1
-            git fetch --no-tags --prune "${DEPTH_OPTS[@]}" origin \
-              "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+            fetch_branch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
             ;;
           2)
             FORK_BRANCH_EXISTS=0

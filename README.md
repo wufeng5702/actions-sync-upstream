@@ -3,12 +3,13 @@
 A GitHub Action that keeps a fork in sync with its upstream repository: it rebases your branch on top of upstream and pushes with `--force-with-lease`.
 
 - Auto-detects the upstream (the fork's parent) and your default branch via the GitHub API — most forks need no configuration.
-- Fetches only the branch being synced; tags are never fetched.
+- Rebases only the branch being synced; your other branches are untouched.
 - Scheduled runs are cheap: when the branch is already up to date nothing is pushed, and a rebase conflict fails the job instead of pushing a broken state.
 
 ## Usage
 
-Create `.github/workflows/sync-fork.yml` in your fork:
+1. Enable GitHub Actions in your fork first (Actions tab → "I understand my workflows, go ahead and enable them") — workflows don't run in forks until you do.
+2. Create `.github/workflows/sync-fork.yml` on the fork's default branch (`schedule` triggers only run from the default branch):
 
 ```yaml
 name: Sync fork with upstream
@@ -60,6 +61,7 @@ All inputs are optional.
 - `contents: write` is required so the action can push.
 - Pushing with `GITHUB_TOKEN` does not trigger other workflows in your fork. If you want CI to run on sync commits, pass a personal access token as `token`.
 - A rebase conflict fails the job and nothing is pushed. Rebase manually, resolve the conflicts, push, then re-run the workflow.
-- `fetch_depth: 0` (the default) fetches all branches of your fork during checkout; set a smaller value on very large repositories and the rebase will still work as long as the merge base is within the depth.
+- The branch must exist upstream: if `default_branch` (or the detected default branch) doesn't exist on the upstream side, the job fails with an error.
+- `fetch_depth: 0` (the default) fetches the fork's full history during checkout — which includes all branches and tags, as that is how `actions/checkout` implements full-history mode. The sync step itself fetches only the target branch and never tags. On very large repositories set a smaller value; the rebase still works as long as the merge base is within the depth.
 - Requires the `gh` CLI, which is preinstalled on GitHub-hosted runners.
 - Pin the action to a tag (e.g. `@v1`) instead of `@main` once a release exists, if you want reproducible runs.
