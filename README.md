@@ -4,6 +4,7 @@ A GitHub Action that keeps a fork in sync with its upstream repository: it rebas
 
 - Auto-detects the upstream (the fork's parent) and your default branch via the GitHub API — most forks need no configuration.
 - Rebases only the branch being synced; your other branches are untouched.
+- Quiet logs: checkout fetches a single commit with no tags, then only the two branches being synced — unrelated tags and branches never show up.
 - Scheduled runs are cheap: when the branch is already up to date nothing is pushed, and a rebase conflict fails the job instead of pushing a broken state.
 
 ## Usage
@@ -37,7 +38,7 @@ All inputs are optional.
 | --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `upstream`      | `""`    | Upstream repository as `owner/name` or a github.com URL. Empty = auto-detect the fork's parent (exits successfully if the repository is not a fork).                        |
 | `default_branch` | `""`   | Branch to sync. Empty = the repository's default branch.                                                                                                                  |
-| `fetch_depth`   | `"0"`   | Fetch depth for checkout and both sync fetches (origin and upstream). `0` = full history, always safe for rebase. Smaller values are faster but the rebase fails if the merge base is deeper.       |
+| `fetch_depth`   | `"0"`   | History depth the sync fetch pulls for both branches (origin and upstream). `0` = complete history, always safe for rebase. Smaller values are faster but the rebase fails if the merge base is deeper.       |
 | `token`         | `""`    | Token used for API calls and pushing. Empty = the workflow's `GITHUB_TOKEN`.                                                                                              |
 
 ```yaml
@@ -62,6 +63,6 @@ All inputs are optional.
 - Pushing with `GITHUB_TOKEN` does not trigger other workflows in your fork. If you want CI to run on sync commits, pass a personal access token as `token`.
 - A rebase conflict fails the job and nothing is pushed. Rebase manually, resolve the conflicts, push, then re-run the workflow.
 - The branch must exist upstream: if `default_branch` (or the detected default branch) doesn't exist on the upstream side, the job fails with an error.
-- `fetch_depth: 0` (the default) fetches the fork's full history during checkout — which includes all branches and tags, as that is how `actions/checkout` implements full-history mode. The sync step itself fetches only the target branch and never tags. On very large repositories set a smaller value; the rebase still works as long as the merge base is within the depth.
+- Nothing extra is ever fetched: the checkout step pulls exactly one commit with no tags, and the sync step pulls only the target branch from each side, also without tags. `fetch_depth` (default `0`) controls how much history of those two branches is fetched — `0` means complete history; on very large repositories set a smaller value, and the rebase still works as long as the merge base is within the depth.
 - Requires the `gh` CLI, which is preinstalled on GitHub-hosted runners.
 - Pin the action to a tag (e.g. `@v1`) instead of `@main` once a release exists, if you want reproducible runs.

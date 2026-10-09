@@ -11,7 +11,7 @@ inputs:
     required: false
     default: ""
   fetch_depth:
-    description: "Fetch depth for checkout and both sync fetches (origin and upstream). 0 = full history (always safe for rebase)."
+    description: "History depth the sync fetch pulls for both branches (0 = complete history). Checkout itself always fetches a single commit, keeping unrelated branches/tags out of the log."
     required: false
     default: "0"
   token:
@@ -25,7 +25,10 @@ runs:
     - name: Checkout repository
       uses: actions/checkout@v7
       with:
-        fetch-depth: ${{ inputs.fetch_depth }}
+        # Always shallow (one commit, no tags): the sync step below fetches
+        # exactly the history it needs, so logs stay free of unrelated
+        # branches and tags.
+        fetch-depth: 1
         fetch-tags: false
         # The sync script configures auth itself (token input / GH_TOKEN);
         # persisting checkout's credential would shadow it.
@@ -75,11 +78,18 @@ runs:
           exit 1
         fi
 
-        # fetch <remote> <refspec>; depth 0 = full history — git rejects
-        # --depth=0 ("not a positive number"), so the zero case omits the flag.
+        # fetch <remote> <refspec>: exactly the history this sync needs —
+        # never tags, never other branches. Depth 0 completes the shallow
+        # checkout with --unshallow (a plain fetch does not deepen; git
+        # rejects --depth=0; --unshallow errors on an already complete repo,
+        # hence the guard).
         fetch_branch() {
           if [ "$INPUT_FETCH_DEPTH" -eq 0 ]; then
-            git fetch --no-tags --prune "$1" "$2"
+            if [ -f "$(git rev-parse --git-path shallow)" ]; then
+              git fetch --no-tags --prune --unshallow "$1" "$2"
+            else
+              git fetch --no-tags --prune "$1" "$2"
+            fi
           else
             git fetch --no-tags --prune "--depth=$INPUT_FETCH_DEPTH" "$1" "$2"
           fi
@@ -110,12 +120,9 @@ runs:
           git remote set-url upstream "https://github.com/${UPSTREAM}"
         }
 
-        if ! fetch_branch upstream "+refs/heads/${BRANCH}:refs/remotes/upstream/${BRANCH}"; then
-          echo "::error::Cannot fetch '${BRANCH}' from upstream ${UPSTREAM} — check that the branch exists upstream."
-          exit 1
-        fi
-
         # Does the fork already have this branch? ls-remote exits 2 when the ref is missing.
+        # This side is fetched first so that at depth 0 the --unshallow
+        # completes the repo before upstream's (plain) fetch below.
         set +e
         git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null 2>&1
         LS_RC=$?
@@ -137,6 +144,11 @@ runs:
             exit 1
             ;;
         esac
+
+        if ! fetch_branch upstream "+refs/heads/${BRANCH}:refs/remotes/upstream/${BRANCH}"; then
+          echo "::error::Cannot fetch '${BRANCH}' from upstream ${UPSTREAM} — check that the branch exists upstream."
+          exit 1
+        fi
 
         # Reset the working copy to the fork's branch, or to upstream when new.
         if [ "$FORK_BRANCH_EXISTS" -eq 1 ]; then
