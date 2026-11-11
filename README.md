@@ -39,7 +39,7 @@ All inputs are optional.
 | `upstream`      | `""`    | Upstream repository as `owner/name` or a github.com URL. Empty = auto-detect the fork's parent (exits successfully if the repository is not a fork).                        |
 | `default_branch` | `""`   | Branch to sync. Empty = the repository's default branch.                                                                                                                  |
 | `fetch_depth`   | `"0"`   | History depth the sync fetch pulls for both branches (origin and upstream). `0` = complete history, always safe for rebase. Smaller values are faster but the rebase fails if the merge base is deeper.       |
-| `token`         | `""`    | Token used for API calls and pushing. Empty = the workflow's `GITHUB_TOKEN`.                                                                                              |
+| `token`         | `""`    | Token used for API calls and pushing. Empty = the workflow's `GITHUB_TOKEN` (cannot push `.github/workflows/*` changes — see below).                                                                  |
 
 ```yaml
       - uses: wufeng5702/actions-sync-upstream@main
@@ -47,8 +47,25 @@ All inputs are optional.
           upstream: GopeedLab/gopeed # optional, auto-detected otherwise
           default_branch: main       # optional, auto-detected otherwise
           fetch_depth: "50"          # optional speed-up for frequently synced forks
-          token: ${{ secrets.SYNC_TOKEN }} # optional, see notes below
+          token: ${{ secrets.SYNC_TOKEN }} # optional, needed to push workflow file changes — see below
 ```
+
+## Pushing `.github/workflows/*` changes
+
+When upstream modifies workflow files, those commits are replayed into your fork by the rebase — and pushing them requires a token with the `workflows` permission. The built-in `GITHUB_TOKEN` can never get it (GitHub does not expose that permission on it), so the push is rejected with:
+
+> refusing to allow a GitHub App to create or update workflow `.github/workflows/build.yml` without `workflows` permission
+
+Merging upstream instead of rebasing does not help, and neither does any `permissions:` setting — the rejection is based on the content of the pushed commits, not on history shape.
+
+Fix — create a personal access token:
+
+- fine-grained PAT: repository access to the fork, permissions **Contents: write** and **Workflows: write**; or
+- classic PAT: scopes **`repo`** and **`workflow`** (classic `repo` alone is not enough).
+
+Store it as a secret in the fork (e.g. `SYNC_TOKEN`) and pass it via the `token` input as shown above. Side effect: sync commits pushed with a PAT will trigger `on: push` workflows in your fork.
+
+If you don't want a PAT, install a GitHub App on the fork with Contents: write + Workflows: write and mint an installation token with `actions/create-github-app-token` — pass that token through the same input.
 
 ## How it works
 
@@ -60,7 +77,7 @@ All inputs are optional.
 ## Notes
 
 - `contents: write` is required so the action can push.
-- Pushing with `GITHUB_TOKEN` does not trigger other workflows in your fork. If you want CI to run on sync commits, pass a personal access token as `token`.
+- Pushing with `GITHUB_TOKEN` does not trigger other workflows in your fork; using a PAT (see "Pushing `.github/workflows/*` changes") makes sync commits trigger them too.
 - A rebase conflict fails the job and nothing is pushed. Rebase manually, resolve the conflicts, push, then re-run the workflow.
 - The branch must exist upstream: if `default_branch` (or the detected default branch) doesn't exist on the upstream side, the job fails with an error.
 - Nothing extra is ever fetched: the checkout step pulls exactly one commit with no tags, and the sync step pulls only the target branch from each side, also without tags. `fetch_depth` (default `0`) controls how much history of those two branches is fetched — `0` means complete history; on very large repositories set a smaller value, and the rebase still works as long as the merge base is within the depth.

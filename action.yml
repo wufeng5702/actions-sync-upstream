@@ -15,7 +15,7 @@ inputs:
     required: false
     default: "0"
   token:
-    description: "Token used for API calls and pushing. Empty = the workflow's GITHUB_TOKEN."
+    description: "Token used for API calls and pushing. Empty = the workflow's GITHUB_TOKEN (which cannot push .github/workflows/* changes — use a PAT with workflows permission for forks syncing workflow files)."
     required: false
     default: ""
 
@@ -176,7 +176,7 @@ runs:
         fi
 
         if ! git push --force-with-lease origin "refs/heads/${BRANCH}"; then
-          echo "::error::Push of '${BRANCH}' was rejected (stale remote-tracking ref, branch protection, or missing permission)."
+          echo "::error::Push of '${BRANCH}' was rejected (stale ref / branch protection / permission). If the push includes .github/workflows/* changes, the built-in GITHUB_TOKEN cannot push those — pass a PAT with the workflows permission via the 'token' input (see README)."
           exit 1
         fi
 
